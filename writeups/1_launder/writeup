@@ -1,0 +1,91 @@
+C++17 introduced std::launder, where description at https://en.cppreference.com/w/cpp/utility/launder says:
+> Obtains a pointer to the object located at the address represented by p.
+Which sounds suspiciously similar to `address-of` (`&`) operator:
+> Built-in address-of operator creates a pointer pointing to the object or function operand.
+(ref: https://en.cppreference.com/w/cpp/language/operator_member_access)
+
+But they are not equivalent. The devil must lie in the details, so let's consider an example (heavily inspired by example in https://miyuki.github.io/2016/10/21/std-launder.html):
+
+```
+#include <new>
+#include <iostream>
+
+struct A {
+    A() { std::cout << "A's constructor" << std::endl; }
+    virtual int f();
+};
+
+struct B : A {
+    B() { std::cout << "B's constructor" << std::endl; }
+    virtual int f() {
+        std::cout << "B's f" << std::endl;
+        new (this) A; return 1;
+    }
+};
+
+int A::f() {
+    std::cout << "A's f" << std::endl;
+    new (this) B; return 2;
+}
+
+int main() {
+    std::cout << "1st phase" << std::endl;
+    A a1;
+    std::cout << "'a1' got stack allocated" << std::endl;
+    int direct1 = a1.f();
+    std::cout << "direct1 = " << direct1 << std::endl;
+    int addrof1 = (&a1)->f();
+    std::cout << "addrof1 = " << addrof1 << std::endl;
+    int laundered1 = std::launder(&a1)->f();
+    std::cout << "laundered1 = " << laundered1 << std::endl;
+
+    std::cout << std::endl << "2nd phase" << std::endl;
+    A a2;
+    std::cout << "'a2' got stack allocated" << std::endl;
+    for(int i = 1; i < 5; i++) {
+        int launderedi = std::launder(&a2)->f();
+        std::cout << "(" << i << " iter) launderedi = " << launderedi << std::endl;    
+    }
+}
+```
+
+Compiling it (remember to add `-std=c++17`) and running gives:
+```
+1st phase
+A's constructor
+'a1' got stack allocated
+A's f
+A's constructor
+B's constructor
+direct1 = 2
+A's f
+A's constructor
+B's constructor
+addrof1 = 2
+B's f
+A's constructor
+laundered1 = 1
+
+2nd phase
+A's constructor
+'a2' got stack allocated
+A's f
+A's constructor
+B's constructor
+(1 iter) launderedi = 2
+B's f
+A's constructor
+(2 iter) launderedi = 1
+A's f
+A's constructor
+B's constructor
+(3 iter) launderedi = 2
+B's f
+A's constructor
+(4 iter) launderedi = 1
+```
+Note how `laundered1 != addrof1` (so `launder` is indeed different from `address-of`) and how `launderedi` changes at each iteration (as that's how laundering works -- we ask compiler to not assume the origin of bytes hidden under a variable, even if it's const (here due to hidden vptr being implicitly const), this dynamic (factual) origin is taken, changed between A and B due to placement new, that is `new (this) A;` and `new (this) B;`.
+
+For another example together with explanation, please see https://stackoverflow.com/a/39382728
+
+What's the uptake from all that? I guess that placement new is "evil", which necessicated creation of std::launder.
