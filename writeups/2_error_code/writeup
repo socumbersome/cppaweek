@@ -1,0 +1,18 @@
+C++11 introduced `<system_error>` header which (per https://en.cppreference.com/w/cpp/error)
+> defines types and functions used to report error conditions originating from the operating system, streams I/O, std::future, or other low-level APIs
+Let's quickly go through few of them with trying to answer "why have that?":
+* `std::error_category` class -- imagine you want to distinguish errors textually/verbally equal to "wrong encoding", one coming from "mp4 decoder" realm and one from "text editor" realm. Even if that one error text coincides, these two realms probably should have disjoint sets of errors. Hence, `error_category` is like the _realm_ mentioned.
+For creating your own category (by subclassing), `equivalent(int, std::error_condition)` is important to be overriden. Using example above, if you want category that's much more abstract and also has "wrong encoding" in its semantics (e.g. "user input via file" category), you may implement "wrong encoding" in your category as _equivalent_ to ones *both* from "mp4 decoder" and "text editor" categories.
+Specific categories defined by standard: `std::system_category`, `std::iostream_category`
+* `std::error_condition` --
+> std::error_condition is a platform-independent error code
+Thought of as an ordered pair of a `value` and `category` -- from example above, that will be e.g. <"wrong encoding", "mp4 decoder">
+* `std::error_code` class -- as `std::error_condition` but platform-dependent
+* `std::system_error` exception -- taking advantage of uniformity of things mentioned above by having a `code` method that returns a `std::error_code` value
+
+Taking a step back and looking now at all 4 of them: I imagine the advantage of using that "`<system_error>` framework" is, for instance:
+* being able to react to particular categories (I've used also the word _realms_ above) of errors, abstracting away specific subsets of error codes -- so not having to group error codes of interest in some `if (someerr == err1 || someerr == someerr == err2 || someerr == err7 || someerr == err100)`) but doing `if (someerr == <error condition of interest>)` where `<error condition of interest>.category()` has `equivalent` method implemented such that `if (someerr == err1 || ...)` is logically contained within
+* being able to uniformly inspect (and e.g. log) errors from other libraries -- one has `value`, `category` and `message` at their disposal (`message` being more useful for user of that lib whereas `value` and `category` for creators of the lib)
+* less polluting with various exceptions -- one probably would be better off with subclassing (or mimicking) `std::system_error` and having just a `code` method and hiding plethora of error codes and categories underneath it
+
+I found a nice blog-post with actual code examples (caveat: a bit long) -> https://akrzemi1.wordpress.com/2017/07/12/your-own-error-code/
