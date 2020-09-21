@@ -1,0 +1,52 @@
+C++17 introduced the `nodiscard` attribute. From https://en.cppreference.com/w/cpp/language/attributes/nodiscard we have
+> If a function declared nodiscard or a function returning an enumeration or class declared nodiscard by value is called from a discarded-value expression other than a cast to void, the compiler is encouraged to issue a warning.
+"discarded-value expression" has its lengthy definition, but let's use just the intuitive first line of its def (https://en.cppreference.com/w/cpp/language/expressions#Discarded-value_expressions)
+> A discarded-value expression is an expression that is used for its side-effects only.
+So, putting these all together, we have two important use-cases:
+1) if you have a function for which you claim its return value must be used, you may consider adding `nodiscard` to it
+2) if you have a type for which you claim, whenever someone receives it, it must be used somehow, you may consider adding `nodiscard` to it
+
+In order to get acquainted with it, let's firstly see a toy example:
+```
+#include <utility>
+
+[[nodiscard]] int f() {
+    return 2;
+}
+
+struct [[nodiscard]] A {
+    A(int arg) : a(arg) {}
+    int a;
+};
+
+A g() {
+    return A(3);
+}
+
+std::pair<int, A> retpairwithA() {
+    return {3, A(4)};
+}
+
+int main() {
+    f(); // gives a warning
+    int x = f();    
+    
+    g(); // gives a warning
+    (void) g(); // no warning, explictly discarding
+    auto y = g();
+
+    retpairwithA(); // no warning!
+}
+```
+Apart from seeing how syntax works here and verifying that compiler indeed issues warnings at "// gives a warning" lines, it's interesting to note we don't get a warning by discarding `retpairwithA` return value. As a default behaviour that's totally OK, but I personally would love to see sth like `nodiscard_transitive` that would cause warnings when discarding value of type which has a `nodiscard_transitive` subtype. Or maybe it's already possible to achieve? Ideas welcome :)
+
+Another thing to consider is, what are actual use-cases? Commitee have found a few:
+* `empty` method on many types has `nodiscard` sprinkled since C++20 (e.g. https://en.cppreference.com/w/cpp/string/basic_string/empty) -- which IMO is fantastic. Even though one could imagine `empty` containing side-effects (reorganizing the data structure for example, a bit akin to _Splay trees_ reorganizing on search), it's important to note we care about _call-sites_ and not what a function called is doing internally. So, "my function has side-effects, thus should not get `nodiscard`" is a good but not great heuristic
+* `new` operator has obtained it since C++20 too -- also great, slightly less likelihoold of introducing memory leaks thanks to that
+* `std::async` -- which seems a bit arguable to me given that the returned `std::future` may be only about side-effects
+
+And people out there have found some too -- from a nice blog-post https://www.bfilipek.com/2017/11/nodiscard.html, we have:
+* enum error codes! Being able to put `nodiscard` to such enum is great. So many bugs are just about ignoring errors :D
+* factory patterns -- also makes total sense. Intention here looks the same as in case of `new` operator having `nodiscard`
+
+
