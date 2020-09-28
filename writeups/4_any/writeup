@@ -1,0 +1,136 @@
+C++17 introduced a class `std::any`. https://en.cppreference.com/w/cpp/utility/any says
+> The class any describes a type-safe container for single values of any type. 
+Cool, so in a single variable of type `std::any` you can hold firstly an `int`, then a `std::string`, then your own-defined type T and so on. Genericity to its fullest. This sounds a bit like requiring RTTI in order to work, but it's acutally not true. Let's observe an example:
+
+```
+#include <any>
+#include <iostream>
+#include <typeinfo>
+
+struct S {
+    S(int x, double y) :
+        x_(x), y_(y) {
+        std::cout << "constructing " << this << std::endl;
+    }
+
+    S(const S& other) {
+        std::cout << "copy constructing " << this << " from " << &other << std::endl;
+        x_ = other.x_;
+        y_ = other.y_;
+    }
+
+    ~S() { std::cout << "destructor of " << this << std::endl; }
+
+    int x_;
+    double y_;
+};
+
+int main() {
+    int n = 3;
+    std::any a = n;
+    
+    try {
+        std::cout << std::any_cast<double>(a) << std::endl;
+    } catch (std::bad_any_cast e) {
+        std::cout << "Exception with `double`: " << e.what() << std::endl;
+    }
+
+    a = "hello"; // we can assign a value of totally different type
+                 // to std::any, no problem at all
+    try {
+        std::cout << std::any_cast<char*>(a) << std::endl;
+    } catch (std::bad_any_cast e) {
+        std::cout << "Exception with `char*`: " << e.what() << std::endl;
+    }
+
+#if __cpp_rtti
+    std::cout << "a's type is: " << a.type().name() << std::endl;
+#else
+    std::cout << "RTTI is disabled, thus `type` method not available" << std::endl;
+#endif
+    std::cout << std::any_cast<char const*>(a) << std::endl;
+    
+    S s = S(1, 2.3);
+    std::cout << "assigning s to a" << std::endl;
+    a = s;
+
+    std::cout << "assigning a to a2" << std::endl;
+    std::any a2 = a;
+    
+    S s2 = S(2, 3.4);
+    std::cout << "assigning s2 to a" << std::endl;
+    a = s2;
+
+    std::cout << "\nmain end\n\n";
+}
+```
+The example output (when compiling with e.g. `g++-8 -std=c++17` so with RTTI by default enabled (you can pass `-fno-rtti` to compile with RTTI disabled))
+```
+Exception with `double`: bad any_cast
+Exception with `char*`: bad any_cast
+a's type is: PKc
+hello
+constructing 0x7ffd94cd63d0
+assigning s to a
+copy constructing 0x13c4c20 from 0x7ffd94cd63d0
+assigning a to a2
+copy constructing 0x13c4c40 from 0x13c4c20
+constructing 0x7ffd94cd63e0
+assigning s2 to a
+copy constructing 0x13c4c60 from 0x7ffd94cd63e0
+destructor of 0x13c4c20
+
+main end
+
+destructor of 0x7ffd94cd63e0
+destructor of 0x13c4c40
+destructor of 0x7ffd94cd63d0
+destructor of 0x13c4c60
+```
+
+Things to notice here:
+1) `std::any` guards a type even if conversion could take place -- `std::any_cast<double>(a)` throws an exception when `a` holds an `int`
+2) `std::any` guards a type's cv-type-qualifiers -- `std::any_cast<char*>(a)` throws but `std::any_cast<char const*>(a)` is OK
+2.5) with RTTI, we have "a's type is: PKc" printed. To see what type it really is, one can do
+```
+$ echo "PKc" | c++filt -t
+> char const*
+```
+2.75) `std::any` doesn't need RTTI, but it _may make use of RTTI_ if it's enabled. It's visible both externally, where with a _feature test macro_ `__cpp_rtti` we can safely access its `type` method or hit a compile-time error when trying to access it without RTTI; and internally -- see e.g.
+```
+#if __cpp_rtti
+	__arg->_M_typeinfo = &typeid(_Tp);
+#endif
+```
+from libstdc++'s implementation (https://github.com/gcc-mirror/gcc/blob/master/libstdc%2B%2B-v3/include/std/any#L565)
+3) `std::any` copy-constructs the value it holds
+4) you can assign `std::any` to other `std::any` and it still correctly juggles the types (as it is done at `std::any a2 = a;`)
+5) when `std::any` receives a new value, it takes care of destroying the old one as we see from the printed "destructor of 0x13c4c20" from example output
+
+Now, it would be nice to ponder whether we have seen anything like that before.
+* about genericity, it's quite a lot like a `void*` type. However, `std::any` may cost a dynamic allocation underneath depending on the type it holds inside (!) Again, from libstdc++'s impl (https://github.com/gcc-mirror/gcc/blob/master/libstdc%2B%2B-v3/include/std/any#L92)
+```
+    template<typename _Tp, typename _Safe = is_nothrow_move_constructible<_Tp>,
+	     bool _Fits = (sizeof(_Tp) <= sizeof(_Storage))
+			  && (alignof(_Tp) <= alignof(_Storage))>
+      using _Internal = std::integral_constant<bool, _Safe::value && _Fits>;
+
+    template<typename _Tp>
+      struct _Manager_internal; // uses small-object optimization
+
+    template<typename _Tp>
+      struct _Manager_external; // creates contained object on the heap
+
+    template<typename _Tp>
+      using _Manager = conditional_t<_Internal<_Tp>::value,
+				     _Manager_internal<_Tp>,
+				     _Manager_external<_Tp>>;
+```
+and from what I understand, the calculation formula on types here `std::integral_constant<bool, _Safe::value && _Fits>` is implementation-defined. So you cannot know whether you will incur a dynamic allocation or not given an arbitrary type and an arbitrary compiler :P
+* I mentioned "This sounds a bit like requiring RTTI in order to work, but it's acutally not true." at the beginning. And we can see from libstdc++ how it has been achieved (kudos to the user who wrote this answer: https://stackoverflow.com/a/51362647) ->
+```
+std::any holds a pointer to a static member function of a templated class. This function can perform many operations and is specific to a given type since the actual instance of the function depends on the template arguments of the class
+```
+But this again is compiler-specific. Please refer to the mentioned https://stackoverflow.com/a/51362647 for a great and concise explanation.
+
+My 3 cents to all that: I prefer being explicit about types, but it seems to me `std::any` could do a great job at APIs boundaries where normally `void*` is used. And one could hold there `T*` instead of just `T`, keeping safe from dynamic allocation pains.
