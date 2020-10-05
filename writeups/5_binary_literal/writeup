@@ -1,0 +1,21 @@
+C++14 has introduced two nice features in integer literal syntax:
+* binary literals
+* digit separators
+Binary literals start with `0b` or `0B` and digit separator is `'`. Let's see:
+```
+#include <iostream>
+
+int main() {
+    int b = 0b1011;
+    int big = 100'250'113;
+    std::cout << b << std::endl;
+    std::cout << big << std::endl;
+}
+```
+which will give (remembering about `-std=c++14`)
+```
+11
+100250113
+```
+
+So nice and simple :D Binary literals certainly could come useful when dealing with binary masks and separator just about always in at least 4-digit literals, improving readability.
