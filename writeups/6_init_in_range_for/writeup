@@ -1,0 +1,105 @@
+C++20 has introduced a syntax extension of range-for, namely _init-statements_. Per https://en.cppreference.com/w/cpp/language/range-for, syntax is:
+```
+attr(optional) for ( init-statement(optional)range_declaration : range_expression )
+loop_statement 
+```
+Great, so at last we have a way of hiding init-thngies which are only relevant to the range-for and not polluting namespace :)
+The proposal (http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/p0614r0.html) of that syntax promises also less problems with lifetime of objects coming from `range_expression`. I took the liberty to actually use the example code from the proposal so that we will look at why it works and also that there are still traps out there. Let's see:
+```
+#include <iostream>
+#include <vector>
+
+class T {
+    std::vector<int> data_;
+public:
+    T(std::vector<int> data) : data_(data) {}
+    std::vector<int>& items() { return data_; }
+};
+
+T foo() {
+    std::vector<int> v{2,3,7};
+    return T(v);
+}
+
+int main() {
+    std::cout << "Without init statement: " << std::endl;
+    for (auto& x : foo().items()) {
+        std::cout << "element " << x << std::endl;
+    }
+
+    std::cout << "\nWith init statement (1): " << std::endl;
+    for (auto t = foo(); auto& x : t.items()) {
+        std::cout << "element " << x << std::endl;
+    }
+
+    std::cout << "\nWith init statement (2): " << std::endl;
+    for (auto& its = foo().items(); auto& x : its) {
+        std::cout << "element " << x << std::endl;
+    }
+
+    std::cout << "\n(2) desugared: " << std::endl;
+    {
+        auto& its = foo().items();
+        auto&& _range = its;
+        auto _begin = _range.begin();
+        auto _end = _range.end();
+        for( ; _begin != _end; ++_begin) {
+            auto& x = *_begin;
+            std::cout << "element " << x << std::endl;
+        }
+    }
+
+    std::cout << "\n(1) desugared: " << std::endl;
+    {
+        auto t = foo();
+        auto&& _range = t.items();
+        auto _begin = _range.begin();
+        auto _end = _range.end();
+        for( ; _begin != _end; ++_begin) {
+            auto& x = *_begin;
+            std::cout << "element " << x << std::endl;
+        }
+    }
+}
+```
+
+When I compiled it (`g++-9 -std=c++2a` in my case) and ran it, I got:
+```
+Without init statement: 
+element 14372896
+element 0
+element 7
+
+With init statement (1): 
+element 2
+element 3
+element 7
+
+With init statement (2): 
+element 14372928
+element 0
+element 7
+
+(2) desugared: 
+element 14372896
+element 0
+element 7
+
+(1) desugared: 
+element 2
+element 3
+element 7
+```
+
+So, what we can see from the output is:
+1) at `Without init statement:` that indeed problem of lifetime of temporaries in range-for exists (notice that `items` returns a _reference_ to a vector. The proposal also lists an open issue about that -- http://www.open-std.org/jtc1/sc22/wg21/docs/cwg_closed.html#900
+2) at `With init statement (1):` that new syntax indeed helps. That's because the additional `t` variable anchors the lifetime of returned object as it's of a non-reference type, thus allowing to use `items()` (or any other method) throughout whole loop body execution (so called "reference lifetime extensions")
+3) at `With init statement (2):` that new syntax is not a magic solution for lifetime-related bugs. It's important here to understand that `foo().items()` destroys the "anchor-effect" described at 2), so one needs to be careful even when using the new syntax
+4) at `(2) desugared:` we can understand why at 3) we got a fail. So, it's because range-for is not magic and such desugaring (it may not be unique, but should be at least equivalent, which is good enough for playing and understanding) shows we got there `auto& its = foo().items();`
+5) at `(1) desugared:` we can see why 2) succeeded. The key is to have `auto t = foo();` where `auto` will become a non-reference type.
+
+How I look at these phenomena is:
+* new syntax is nice, especially that it allows not polluting namespace
+* fix for a lifetime problem when using new syntax is just a bit of a hack and, ideally, I would like to forget I've seen it and have http://www.open-std.org/jtc1/sc22/wg21/docs/cwg_closed.html#900 reopened and resolved differently, e.g. as from http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/p0614r0.html#impact-lifetime
+> One of the possible solutions that has been considered is to give the range-based for statement special semantics by which all temporary values that are part of the range expression are alive until the end of the loop
+:P
