@@ -1,0 +1,76 @@
+C++11 has introduced so called _user-defined literals_. The reference is quite complex (https://en.cppreference.com/w/cpp/language/user_literal), but a not fully formal tl;dr would be: we can define an `T operator"" _mylit()` that will kick in when seeing e.g. `T var = 42_mylit;`.
+
+Let's observe examples:
+```
+#include <iostream>
+
+long double operator"" _km(long double x) {
+    return x * 1000;
+}
+
+
+unsigned long long int operator"" _m(unsigned long long int x) {
+    return x;
+}
+
+int main() {
+    int a = 4.1_km;
+//  int b = 4_km; // compile-time error, literal `4` matches
+    // parameter type `unsigned long long int` instead of `long double`
+    int b = 4_m;
+    std::cout << a + b << std::endl;
+}
+```
+Running it yields `4104`. Cool, so we have a fancy customizable syntax that may add some readability (at least with regard to intention of a particular literal value) plus be used as conversion tool. The example above can be confusing stil as we end up with standard primitve types at the end of the day. Fortunately, we can have a return type to be anything we want, so for example we can modify the above into:
+```
+#include <iostream>
+#include <ostream>
+
+class MetricDistance {
+public:
+    MetricDistance(double x) : x_(x) {}
+    
+    friend std::ostream& operator<< (std::ostream& out, const MetricDistance& md);
+    MetricDistance operator+ (MetricDistance const& md) { 
+         return MetricDistance(x_ + md.x_);
+    } 
+
+    double x_;
+};
+
+std::ostream& operator<< (std::ostream& out, const MetricDistance& md) {
+    out << md.x_ << " meters";
+    return out;
+}
+
+MetricDistance operator"" _km(long double x) {
+    return MetricDistance(x * 1000);
+}
+
+MetricDistance operator"" _m(unsigned long long int x) {
+    return MetricDistance(x);
+}
+
+int main() {
+    MetricDistance a = 4.1_km;
+//  MetricDistance b = 4_km; // compile-time error, literal `4` matches
+    // parameter type `unsigned long long int` instead of `long double`
+    MetricDistance b = 4_m;
+    std::cout << a + b << std::endl;
+}
+```
+that will yield `4104 meters` when run.
+A bit more cool -- we have now two degrees of freedom: custom suffixes and custom types that will be tied to these prefixes. There's also a third degree of freedom hidden in the fact that we define `operator""`-s body -- one can use side effects. Not the I encourage it, but... e.g. changing definition of `_km` from previous example:
+```
+MetricDistance operator"" _km(long double x) {
+    std::cout << "Converting " << x << "km expressed in `long double` to MetricDistance" << std::endl;
+    return MetricDistance(x * 1000);
+}
+```
+and what we'll get when running it is:
+```
+Converting 4.1km expressed in `long double` to MetricDistance
+4104 meters
+```
+
+A nice question to ask is: can we do something significantly different with the new feature? For that, I refer you to a great example at https://stackoverflow.com/a/7906630 -- the `operator""` in a _template_ flavour can be used to make compile-time checks and this looks quite powerful to me. A similar idea to that `_bits` that comes to my mind would be `_ip` suffix if we want to store IP addresses. I wonder how many typos normally would occur when not having a static check for "only digit or dot". Not sure, but I like that idea of having a static check :P
