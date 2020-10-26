@@ -1,0 +1,75 @@
+C++14 has introduced variable templates (not to be confused with _variadic_ templates which are about arguments for a template (https://en.cppreference.com/w/cpp/language/parameter_pack)). I really like the definition from https://en.cppreference.com/w/cpp/language/variable_template
+> A variable template defines a family of variables or static data members.
+Cool, so we can have a parameterized variable aka family of variables. Let's reuse to some extent the example given from cppreference and look at:
+```
+#include <chrono>
+#include <thread>
+#include <iostream>
+
+template<class T>
+constexpr T pi = T(3.1415926535897932385L);  // variable template
+
+template<class T>
+T pi2 = T(3.1415926535897932385L);
+
+template<class T>
+T circular_area(T r) // function template
+{
+    return pi<T> * r * r; // pi<T> is a variable template instantiation
+}
+
+struct S {
+    S(bool b) : b_(b) {}
+
+    int maybe_expensive(int a) {
+        std::cout << "Starting expensive computation; a = " << a << std::endl;
+        if (b_) {
+            std::cout << __FUNCTION__ << " is expensive" << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+        std::cout << "Finished expensive computation" << std::endl;
+        return a*a;
+    }
+
+    bool b_;
+};
+
+template<class T>
+int myvar = 1 + T(true).maybe_expensive(3);
+
+int main() {
+    std::cout << pi2<double> << std::endl;
+    std::cout << pi2<int> << std::endl;
+    std::cout << circular_area(pi<double>) << std::endl;
+    std::cout << circular_area(pi<int>) << std::endl;
+    std::cout << circular_area(pi<bool>) << std::endl;
+
+    std::cout << "Will use myvar" << std::endl;
+    std::cout << myvar<S> << std::endl;
+    std::cout << myvar<S> << std::endl;
+}
+```
+Output is
+```
+Starting expensive computation; a = 3
+maybe_expensive is expensive
+Finished expensive computation
+3.14159
+3
+31.0063
+27
+1
+Will use myvar
+10
+10
+```
+What we can take away from that:
+* a variable template doesn't need to appear with a `constexpr` by side, vide `pi2` def (but one may have such impression by looking at examples from cppreference - I've had :)). You can run it e.g. in https://cppinsights.io/ to see that we'll just get two instantiations of `pi2` ->
+```
+template<>
+double pi2<double> = double(3.14159265358979323851L);
+template<>
+int pi2<int> = int(3.14159265358979323851L);
+```
+and it's totally OK for them to live outside of `constexpr` world
+* a variable template parameter can be used as non-variable template parameter, in particular we may want to hide expensive computations there as `struct S` and `myvar` are showing. What's important, it's `myvar<S>` causing the instantiation but only compile-time-wise, because runtime-wise it will still happen before first statement in `main`. Notice how it also implies (and is visible in the output) that `maybe_expensive` runs only once
