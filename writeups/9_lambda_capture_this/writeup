@@ -1,0 +1,112 @@
+C++17 has introduced `*this` in the syntax of lambda captures. What is means, is you can copy whole enclosing object to lambda's closure. The paper that has made this proposal does a great job at explaining why & how, so I recommend checking it out -> http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2015/p0018r0.html and here I'll only use the example which is used there: so, let's observe
+```
+#include <iostream>
+#include <future>
+
+class Work {
+private:
+    int value;
+public:
+    Work() : value(42) {}
+    std::future<int> spawn() {
+        return std::async( [=]() -> int {
+            return value;
+        });
+    }
+};
+
+std::future<int> foo() {
+    Work tmp;
+    return tmp.spawn();
+}
+
+int main() {
+    std::future<int> f = foo();
+    f.wait();
+    std::cout << f.get() << std::endl;
+}
+```
+As per paper's claim, we should see rubbish instead of `42` as output. Normally it will work "fine" however -- bread and butter of using destroyed objects that they mostly work. But one can do `valgrind --tool=memcheck --track-origins=yes <compiled_program>` and see that we're playing with fire
+```
+==11109== Conditional jump or move depends on uninitialised value(s)
+(....)
+==11109==    by 0x401F54: main (ex.cpp:24)
+==11109==  Uninitialised value was created by a stack allocation
+==11109==    at 0x4035CC: std::__basic_future<int>::wait() const (future:689)
+```
+So, indeed, one could be fooled that if `=` copies by value then this code is safe, but it's merely an implicit copy of `this` pointer -- the object stays as it was. You can use e.g. https://cppinsights.io/ to see how the lambda could be seen in an intermediate representation inside a compiler ->
+```
+  inline std::future<int> spawn()
+  {
+            
+    class __lambda_12_28
+    {
+      public: 
+      inline /*constexpr */ int operator()() const
+      {
+        return __this->value;
+      }
+      
+      private: 
+      Work * __this;
+      public: 
+      // inline /*constexpr */ __lambda_12_28(__lambda_12_28 &&) noexcept = default;
+      // inline /*constexpr */ __lambda_12_28 & operator=(const __lambda_12_28 &) = delete;
+      __lambda_12_28(Work * _this)
+      : __this{_this}
+      {}
+      
+    };
+    
+    return std::async(__lambda_12_28{this});
+  }
+```
+so, just a plain copy of `this` pointer, used then to access members (e.g. `__this->value` from the example output).
+The paper shows how one can work it aroud, at "2.3   Onerous and error-prone work-around". In short, `[=,tmp=*this]`, and I agree with authors this is a terrible way :P
+So, getting back to the example from the beginning, we may replace `spawn` with
+```
+    std::future<int> spawn() {
+        return std::async( [=, *this]() -> int {
+            return value;
+        });
+    }
+```
+and then running valgrind on resulting binary yields
+```
+==11224== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
+```
+hurray :D
+Looking again at https://cppinsights.io/ to understand what has changed:
+```
+  inline std::future<int> spawn()
+  {
+            
+    class __lambda_10_28
+    {
+      public: 
+      inline /*constexpr */ int operator()() const
+      {
+        return (&__this)->value;
+      }
+      
+      private: 
+      Work __this;
+      public: 
+      // inline /*constexpr */ __lambda_10_28(__lambda_10_28 &&) noexcept = default;
+      // inline __lambda_10_28 & operator=(const __lambda_10_28 &) = delete;
+      __lambda_10_28(const Work & _this)
+      : __this{_this}
+      {}
+      
+    };
+    
+    return std::async(__lambda_10_28{*this});
+  }
+```
+we can see `__this` member of a generated class is now of non-pointer type, so a copy constructor at `__this{_this}` will run.
+
+My 3 cents: I like this feature as it adds consisteny into the language IMO. As for paper's motivations
+```
+For example, parallel execution of a closure on large data spanning NUMA regions will be more performant if a copy of that closure residing in the same NUMA region acts upon that data.
+```
+I have no experience in "I'm for parallel things"-architectures, but the claims make total sense to me. Would love to see some benchmarks for that though :)
