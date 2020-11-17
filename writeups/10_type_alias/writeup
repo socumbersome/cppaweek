@@ -1,0 +1,59 @@
+C++11 has introduced type aliases. Their similarity to `typedef` declarations is mentioned explicitly, e.g. from https://en.cppreference.com/w/cpp/language/type_alias
+> Type alias is a name that refers to a previously defined type (similar to typedef).
+and also at "Explanation" paragraph, at 1) we have
+> [...] There is no difference between a type alias declaration and typedef declaration. [...]
+So, why do we need anything else than a `typedef`? Let's see the differences:
+* a syntax resembling variable declaration -- to compare:
+```
+using MyType = int* (*)(char, bool);
+typedef int* (*MyType2)(char, bool);
+```
+For me it's a bit overrated argument that using `using` is more readable, especially that with `typedef` you get an immediate hint as to where to start deciphering the type (namely, where new name appears :)). But seeing a bare type does have its charm too...
+* you can templatize such `using` alias (not quite possible with `typedef`). Some nontrivial example with an alias (+ usage) of a type of a general "mapping over a container" function:
+```
+#include <iostream>
+#include <vector>
+#include <functional>
+
+
+template<typename Item, typename ItemTransformed,
+template <typename> typename Container>
+using Mapper = std::function<Container<ItemTransformed>
+    (Container<Item>, std::function<Item(ItemTransformed)>)
+>;
+
+
+int main() {
+    Mapper<char, int, std::vector> const mapper =
+    [](auto v, auto f) {
+        std::vector<int> res;
+        res.reserve(v.size());
+        std::transform(v.begin(), v.end(),
+            std::back_inserter(res), f);
+        return res;
+    };
+
+    std::vector<char> vc{'a', 'b', 'c'};
+    auto vi = mapper(vc, [](char c) { return c - 'a'; });
+
+    for(auto i : vi) {
+        std::cout << i << std::endl;
+    }
+}
+```
+(... looking pensively at the above and `C a -> (a -> b) -> C b` from Haskell.. :D)
+* you can use `typedef` as an init-statement, which is not allowed for `using`, e.g. (C++20 required for init-statement inside a range-for)
+```
+for(typedef int SoInty; SoInty i : vi) {
+    std::cout << i << std::endl;
+}
+```
+compiles but
+```
+for(using SoInty = int; SoInty i : vi) {
+    std::cout << i << std::endl;
+}
+```
+does not, so actually a point for `typedef` there :)
+
+All in all, imo cool that one can templatize type aliases thanks to `using`, but looks like it's a bit of a shame that it doesn't cover all of `typedef` usages (init-statements).
