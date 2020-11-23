@@ -1,0 +1,91 @@
+C++20 has introduced `[[no_unique_address]]` attribute. The https://en.cppreference.com/w/cpp/language/attributes/no_unique_address says
+> Indicates that this data member need not have an address distinct from all other non-static data members of its class.
+This smells rather significantly of optimization opportunities and indeed it is. Let's see an (maybe a bit contrived :)) example of a class that abstracts away reacting to adding of an element (here, reacting by logging):
+```
+#include <vector>
+#include <iostream>
+
+template<class Reactor>
+class Foo {
+public:
+    std::vector<int> v;
+    [[no_unique_address]] Reactor reactor_;
+
+    void add(int i) {
+        v.push_back(i);
+        reactor_(i);
+    }
+};
+
+template<class Reactor>
+class Bar { // differs from Foo only with not having `no_unique_address`
+public:
+    std::vector<int> v;
+    Reactor reactor_;
+
+    void add(int i) {
+        v.push_back(i);
+        reactor_(i);
+    }
+};
+
+
+class Logger {
+public:
+    void operator() (int a) {
+        std::cout << "Logger: " << a << std::endl;
+    }
+};
+
+class StatefulLogger {
+    size_t i_ = 0;
+public:
+    void operator() (int a) {
+        i_++;
+        std::cout << "StatefulLogger: " << a << " (" << i_ << " item)" << std::endl;
+    }
+};
+
+int main() {
+    Foo<Logger> foo1;
+    foo1.add(2); foo1.add(4);
+    Foo<StatefulLogger> foo2;
+    foo2.add(2); foo2.add(4);
+    Bar<Logger> bar;
+
+    std::cout << "Addresses (of members as well):" << std::endl;
+    std::cout << "foo1: " << &foo1 << "; " << &foo1.v << "; " << &foo1.reactor_ << std::endl; 
+    std::cout << "foo2: " << &foo2 << "; " << &foo2.v << "; " << &foo2.reactor_ << std::endl;
+    std::vector<int> v;
+
+    std::cout << "Sizes of objects:" << std::endl;
+    std::cout << "foo1: " << sizeof(foo1) << "; foo2: " << sizeof(foo2) 
+        << "; bar: " << sizeof(bar) << " (vector<int> size = "
+        << sizeof(v) << ")" << std::endl;
+
+    std::cout << "Sizes of types:" << std::endl;
+    std::cout << sizeof(Logger) << "; " << sizeof(StatefulLogger)
+        << "; " << sizeof(Foo<Logger>) << "; " << sizeof(Foo<StatefulLogger>) << std::endl;
+}
+```
+The example output is:
+```
+Logger: 2
+Logger: 4
+StatefulLogger: 2 (1 item)
+StatefulLogger: 4 (2 item)
+Addresses (of members as well):
+foo1: 0x7ffef3d30280; 0x7ffef3d30280; 0x7ffef3d30280
+foo2: 0x7ffef3d302c0; 0x7ffef3d302c0; 0x7ffef3d302d8
+Sizes of objects:
+foo1: 24; foo2: 32; bar: 32 (vector<int> size = 24)
+Sizes of types:
+1; 8; 24; 32
+```
+What we can notice there:
+* how `foo1` and its members all have the same address (because `Logger` is an _empty type_ -- one can see it by e.g. printing `std::is_empty<Logger>::value`), so `no_unique_address` indeed kicked in
+* how `foo2.reactor_` has a unique address (so indeed `no_unique_address` is _not_ a guarantee)
+* how size of `foo1` is optimized along with address non-uniqueness (and sizeof of `foo2` and `bar` being equal)
+* how `sizeof(Logger)` is non-zero and that not being a problem for non-uniqueness optimization
+
+How I view that: a nice feture for optimization freaks, but at the same time I'd think it should rather be a compiler's switch to sprinkle such optimizations for all members in all classes rather than having to type that lengthy attribute everywhere if one wants to use that optimization feature.
