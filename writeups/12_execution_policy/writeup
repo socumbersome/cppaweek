@@ -1,0 +1,38 @@
+C++17 has introduced _execution policies_ defined in header `<execution>` which can be used in standard algorithms. They are types, as https://en.cppreference.com/w/cpp/algorithm/execution_policy_tag_t says e.g.
+> class sequenced_policy { /* unspecified */ };
+but normally one uses specific instances (from https://en.cppreference.com/w/cpp/algorithm/execution_policy_tag
+> inline constexpr std::execution::sequenced_policy seq { /* unspecified */ };
+)
+So, the 3 options we have are:
+* `sequenced_policy` -- having a guarantee that all will be sequenced on the calling thread when invoking the algorithm
+* `parallel_policy` -- adding the possibility that access functions in algorithm's invocation may be called on implicitly created additional threads
+* `parallel_unsequenced_policy` -- here access functions may execute in unordered fashion across threads where even unsequences within one thread (see also: https://en.wikipedia.org/wiki/Automatic_vectorization)
+(there's also `unsequenced_policy` but that's C++20 ;))
+
+The `parallel_unsequenced_policy` has a strong requirement. To use the example from https://en.cppreference.com/w/cpp/algorithm/execution_policy_tag_t
+```
+int x = 0;
+std::mutex m;
+int a[] = {1,2};
+std::for_each(std::execution::par_unseq, std::begin(a), std::end(a), [&](int) {
+  std::lock_guard<std::mutex> guard(m); // Error: lock_guard constructor calls m.lock()
+  ++x;
+});
+```
+this can deadlock, as it's possible that the code will be effectively reordered as
+```
+guard constructor (iter 1, thread 1)
+guard constructor (iter 2, thread 1)
+++x (iter 1, thread 1)
+guard destructor (iter 1, thread 1)
+++x (iter 2, thread 1)
+guard destructor (iter 2, thread 1)
+```
+This was far from obvious to me by reading the lengthy definition of `parallel_unsequenced_policy` at first, so a lesson to me that one needs to be super careful when judging which parallel policy to use.
+
+Also, what is interesting is which functions obtained overloads with execution policy -- among others:
+* `std::for_each`
+* `std::sort` (yay! :))
+* `std::reduce` (this one actually appeared only at C++17 -- a cousin of `std::accumulate` -- a great post showing the differences: https://stackoverflow.com/a/47191827)
+* `std::find`
+* `std::lexicographical_compare` (this may sound a bit bonkers if one wants to use unsequences version of the execution policy, since lexicographical ordering by nature requires checking "element by element" but the good thing is, a caller doesn't need to worry about that. For curious ones, indeed it's parallelizable -> https://github.com/gcc-mirror/gcc/blob/dc2b372ed1b1e9af6db45051cff95478c7616807/libstdc%2B%2B-v3/include/pstl/algorithm_impl.h#L3638 )
