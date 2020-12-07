@@ -1,0 +1,28 @@
+C++14 has introduced generic lambdas. What's interesting, there are two ways to make it. A quick example:
+```
+#include <iostream>
+
+int main() {
+    auto alambda = [](auto a, int b) {
+        std::cout << "a: " << a << std::endl;
+        return b + 1;
+    };
+    auto ret1 = alambda(2,3);
+    auto ret2 = alambda("word", 4);
+
+    auto tlambda = []<typename T>(T a, int b) {
+        std::cout << "a: " << a << std::endl;
+        return b + 1;
+    };
+
+    auto ret3 = tlambda(2,3);
+    auto ret4 = tlambda("word", 4);
+}
+```
+Rule is, if at least one `auto` appears in parameters list, you get a generic lambda (`alambda`). And if you explicitly provide template parameter list, you also get a generic lambda (`tlambda`). Interesting piece of history is that the second way was added only later, after realizing limitations of the former -- I recommend this read (especially "Motivation" paragraph) -> http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/p0428r1.pdf -- imagine coming up with
+```
+auto advance = [](auto& it, typename std::decay_t<decltype(it)>::difference_type n) {
+   ...
+}
+```
+oh the fun :D So, I'm super glad that this has been noticed and re-standardised :)
