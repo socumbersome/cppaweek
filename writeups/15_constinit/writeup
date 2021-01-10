@@ -1,0 +1,97 @@
+C++20 has introduced a `constinit` specifier. At https://en.cppreference.com/w/cpp/language/constinit definition says
+```
+constinit - asserts that a variable has static initialization, i.e. zero initialization and constant initialization, otherwise the program is ill-formed. 
+```
+At least for me that's not super clear -- let's dissect it:
+* `asserts` -- means we got a compile-time check of contexts with `constinit`
+* `constant initialization` -- this is a funky term equal to "compile-time initialization"
+Additionally, at cppreference we have
+bq. The constinit specifier declares a variable with static or thread storage duration. 
+A quick example:
+```
+#include <iostream>
+
+constinit int x = 2 + 3; // (1)
+
+int main() {
+    // constinit int y = 3 + 4; // (2)
+    constinit thread_local int z = 3 + 4; // (3)
+
+    x++; z++; // (4)
+    std::cout << x << "; " << z << std::endl;
+}
+```
+What we see there at:
+(1) -> global variable has a static duration, so all OK
+(2) -> local variable has an automatic storage duration, uncommenting it would give
+> error: local variable cannot be declared 'constinit'
+(3) -> `thread_local` variable has a thread storage duration, so all OK
+(4) -> what's *not* in the definition is any _constness_ of variable itself, so one can freely modify it's value, no errors there
+
+Good, so we've got a way to ensure a compile-time initialization. That is nice, but what one could think is: don't we have `constexpr` already that's essentially the same? Well, let's observe next example:
+```
+#include <iostream>
+
+int f();  // forward declaration
+
+constexpr int g(long a, int iter) {
+    for(int i = 0; i < iter; i++) {
+        a += i;
+    }
+    if (!std::is_constant_evaluated()) {
+        a = 2;
+    }
+    return a;
+}
+
+int x = f();
+
+int y = g(5, 10); // (1)
+//int y = g(5, 1000000); // (2)
+//constinit int y = g(5, 10); // (3)
+//constinit int y = g(5, 1000000); // (4)
+
+int f()
+{
+    std::cout << "in f(): y = " << y << std::endl;
+    return 3*y + 7;
+}
+
+int main() {
+    std::cout << "in main(): x = " << x << ", y = " << y << std::endl;
+}
+```
+Depending on which from (1) to (4) lines is uncommented, on my PC with `clang-11` this is what I got:
+(1) ->
+```
+in f(): y = 50
+in main(): x = 157, y = 50
+```
+which means `g` has been called at compile-time
+(2) ->
+```
+in f(): y = 0
+in main(): x = 7, y = 2
+
+```
+which means `g` has been called at run-time (despite `g` being `constexpr` and arguments passed being just literals!). Moreover, we can see that `f` has seen `y` being 0. It's a so called "static initialization order problem", please refer to https://isocpp.org/wiki/faq/ctors#static-init-order-on-intrinsics :)
+(3) ->
+```
+in f(): y = 50
+in main(): x = 157, y = 50
+```
+Same as (1) -- good, all happened at compile-time
+(4) -> a compile-time error!
+```
+ex2.cpp:20:15: error: variable does not have a constant initializer
+constinit int y = g(5, 1000000); // (4)
+              ^   ~~~~~~~~~~~~~
+ex2.cpp:20:1: note: required by 'constinit' specifier here
+constinit int y = g(5, 1000000); // (4)
+^~~~~~~~~
+ex2.cpp:7:9: note: constexpr evaluation hit maximum step limit; possible infinite loop?
+        a += i;
+```
+So we can see that unlike (2), when circumstances are so that initialization would happen at run-time (e.g. compiler doesn't feel like doing too many computations as in our case) `constinit` guards us from that, i.e. we have a guarantee, unlike `constexpr`. That might be quite a blow for those who believed in `constexpr` too much :)
+
+My 3 cents: I like that such functionality has been added, but I don't like the name because `const` appears there. Too confusing for me. Would prefer `compilinit`, as it doesn't have much to do with constness for me :P
