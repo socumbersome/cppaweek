@@ -1,0 +1,148 @@
+C++20 has introduced the notion of `concepts` (and `constraints`).
+From https://en.cppreference.com/w/cpp/language/constraints
+> A constraint is a sequence of logical operations and operands that specifies requirements on template arguments.
+i.e. a _thing_ that at the end of the day evaluates to value of type `bool`; and
+> Named sets of such requirements are called concepts.
+so a `concept` is just a named `constraint` which is nicely seen in the grammar rule
+```
+template < template-parameter-list >
+concept concept-name = constraint-expression;	
+```
+Moreover, we have
+> Each concept is a predicate, evaluated at compile time, and becomes a part of the interface of a template where it is used as a constraint
+The "constraint" as the last word above is very unfortunate in my opinion as it refers to an entirely different realm than `constraint` (as in the new feature). I prefer to simplify the sentence above to: concept is a predicate, evaluated at compile time, which means non-satisfiability of the predicate leads to a compile-time error.
+
+Cool, so we can write predicates. Now, predicates to what? cppreference to help:
+> Class templates, function templates, and non-template functions (typically members of class templates) may be associated with a constraint
+OK, so we can write predicates to class templates, to function templates and to non-template functions. How much expressive power we have in a predicate depends on what we can write as a `constraint` and we have a guarantee to get a compile-time error if our predicate is not satisfiable.
+
+With that we shall be ready to tackle some introductory examples :)
+
+```
+#include <iostream>
+
+template<typename T>
+concept AlwaysTrue = true;
+
+template<typename T>
+concept AlwaysFalse = false;
+
+template<AlwaysTrue T>
+int atfunc(T x) {
+    return 42;
+}
+/* // equivalent declaration: (2)
+template<typename T>
+    requires AlwaysTrue<T>
+int atfunc(T x);
+*/
+
+template<AlwaysFalse T>
+int affunc(T x) {
+    return 2;
+}
+
+/* // (4)
+int affunc(double x) {
+    return 3;
+}*/
+
+struct MyType {
+    int myfun() { return 3; }
+};
+
+int main() {
+    std::cout << atfunc(3) << atfunc("abc") << atfunc(MyType{}) << std::endl; // (1)
+    std::cout << affunc(2) << std::endl; // (3)
+}
+```
+What we got here is:
+* `AlwaysTrue` and `AlwaysFalse` are `concepts` and their `constraints` are simplest possible -- just `true` and `false` independent on anything (in particular, independent on `T`)
+* `atfunc` has `<AlwaysTrue T>` syntax which means: `atfunc<T>` is legal only if `T` satisfies `AlwaysTrue`. As it happens, `AlwaysTrue` has a predicate that is always satisfied, so whatever actual `T` will become, that definition of `atfunc` will be used, as we can see from line `(1)`
+* at `(2)` we just have an alternative syntax that introduces also a `requires` keyword -- meaning stays the same
+* `affunc` has `<AlwaysFalse T>` so with the knowledge from `atfunc` analysis we can see predicate will never be satisfied and we get a promised compile-time error at `(3)`
+```
+ex.cpp:36:18: error: no matching function for call to 'affunc'
+    std::cout << affunc(2) << std::endl; // (3)
+                 ^~~~~~
+ex.cpp:20:5: note: candidate template ignored: constraints not satisfied [with T = int]
+int affunc(T x) {
+    ^
+ex.cpp:19:10: note: because 'int' does not satisfy 'AlwaysFalse'
+template<AlwaysFalse T>
+         ^
+ex.cpp:7:23: note: because 'false' evaluated to false
+concept AlwaysFalse = false;
+
+```
+what a beautiful error message <3 Guides us step-by-step as to why sth went wrong -- in instantition of `affunc` with `T = int` we got `AlwaysFalse` not being satisfiable due to evaluating to `false` (constantly)
+* if we uncomment `(4)`, the compile-time error is gone. Why? Well, compiler tries to find _best-match_ and after failing with `affunc` declared with a `concept` it tries the overload without a `concept` which happens to be fine (just a conversion to `double` is needed which is perfectly legal)
+
+Now, let's see what non-trivial things we can write as a `constraint`:
+```
+#include <iostream>
+
+template<typename T>
+concept Fooable = requires (T x) {
+    { x.foo() };
+};
+
+struct DoesFoo {
+    void foo() { std::cout << "foo" << std::endl; }
+};
+
+struct DoesntFoo {
+    void bar() { std::cout << "bar" << std::endl; }
+};
+
+template<Fooable T>
+void willfoo(T x) {
+    x.foo();
+}
+
+template<typename T>
+concept HasFT = requires (T x) {
+    typename T::Foo;
+};
+
+struct DoesHaveFT {
+    struct Foo {
+        void shout() { std::cout << "aaa!" << std::endl; }
+    };
+    Foo mem;
+};
+
+template<HasFT T>
+void somef(T x) {
+    typename T::Foo y = x.mem;
+    y.shout();
+}
+
+int main() {
+    willfoo(DoesFoo{}); // (1)
+    // willfoo(DoesntFoo{}); // (2)
+    somef(DoesHaveFT{}); // (3)
+}
+```
+What we have here is:
+* `Fooable` is a concept and its `constraint` says `x.foo()` must be compilable for any `x` of type `T`. So, using already familiar syntax we define `willfoo` as a function whose parameter type must satisfy `Fooable` and we can see how `(1)` compiles fine whereas uncommenting `(2)` gives
+```
+ex2.cpp:41:6: error: no matching function for call to 'willfoo'
+     willfoo(DoesntFoo{}); // (2)
+     ^~~~~~~
+ex2.cpp:17:6: note: candidate template ignored: constraints not satisfied [with T = DoesntFoo]
+void willfoo(T x) {
+     ^
+ex2.cpp:16:10: note: because 'DoesntFoo' does not satisfy 'Fooable'
+template<Fooable T>
+         ^
+ex2.cpp:5:9: note: because 'x.foo()' would be invalid: no member named 'foo' in 'DoesntFoo'
+    { x.foo() };
+```
+and again beautifully clear error message :)
+* syntax in `Fooable` got a bit more complex now:
+** with `(T x)` we have introduces a new variable `x` -- its purpose is just so that we have _something_ of type `T` which syntactically can be used as if it was a real variable
+** `{ x.foo() };` is an example of a so-called `Simple requirement` which is an arbitrary expression. It just checks whether the expression is syntactically valid (valid here means compilable)
+* `HasFT` is a so called `Type requirement` -- here we are interested in the existence of `T::Foo` and `somef` uses that `concept` which we can see how it works at `(3)` (naturally, calling `somef` with something of type not exposing `Foo` type would result in a compile-time error).
+
+Huh, we have scratched the surface for now. So let it be an episode 1 on concepts. Next time, will take a look at more ways constraints could be formulated.
