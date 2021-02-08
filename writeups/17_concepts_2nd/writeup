@@ -1,0 +1,90 @@
+Next episode on concepts and constraints from C++20 :)
+Let's now take a closer look at what other forms constraints could have. As they evaluate to `bool`-s at the end of the day, it's sensible that we can use conjunction (`&&`) and disjunction (`||`) on them. Extending the example from previous episode:
+```
+template<typename T>
+concept VeryFoo = Fooable<T> && HasFT<T>;
+```
+and voila :) Standard short-circuiting applies (e.g. if `Fooable<T>` won't be satisfied above, compiler will not test `T` against `HasFT<T>`).
+
+From previous episode, we know two kinds of requirements: simple and type ones. There are additionally compoint and nested requirements. To recap, `{ x.foo() };` in
+```
+template<typename T>
+concept Fooable = requires (T x) {
+    { x.foo() };
+};
+```
+is a simple requirement and `typename T::Foo;` in
+```
+template<typename T>
+concept HasFT = requires (T x) {
+    typename T::Foo;
+};
+```
+is a type requirement.
+Next, compound requirement has the form
+`{ expression } _noexcept_ (optional) _return-type-requirement_ (optional);`
+so `expression` plays role of a simple requirement and `return-type-requirement` is any requirement capable of consuming template arguments and `decltype((expression))` is tested against `return-type-requirement`.
+A (simplified) example from cppreference:
+```
+template<typename T> concept C = requires (T x) {
+    {x * 1} -> std::convertible_to<T>;
+};
+```
+which means:
+* `x * 1` must be compilable; and
+* `std::convertible_to<(decltype(x*1), T>` must be satisfied -- note here how one needs to perform the "act of consuming one argument" themselves! That is, since `std::convertible_to` is defined as
+```
+template <class From, class To>
+concept convertible_to =
+  <here something...>
+```
+the `From` param is substituted with `decltype(x*1)` _behind the scenes_
+Let's observe a slightly more complex example as that substitution behind the scenes may be non-intuitive sometimes:
+```
+#include <type_traits>
+
+template<typename A, typename B, typename C, typename D>
+concept ThreeIntegralsAndSecondPointer =
+    std::is_integral<A>::value && std::is_pointer<B>::value && 
+    std::is_integral<C>::value && std::is_integral<D>::value;
+
+template<typename T, typename R>
+concept Conc = requires (T x, T y, R z) {
+    {*z + (x - y)} -> ThreeIntegralsAndSecondPointer<R, T, T>; // (1)
+};
+
+template<typename T, typename R>
+requires Conc<T, R>
+void concf(T x, R y) {
+    // blah blah
+    return;
+}
+
+int main() {
+    concf(2, new int(3)); // (2)
+}
+```
+After carefully chasing types we can see that the call at `(2)` makes `T = int` and `R = int*` in `concf`, thus `Conc` with `T = int, R = int*` is checked and since that means `*z + (x - y)` is of type `int`, `A` in `ThreeIntegralsAndSecondPointer` will be instantiated with `int` (_behind the scenes_ substitution) and the rest is explicit: from `ThreeIntegralsAndSecondPointer<R, T, T>;` we get that `B` will be `int*`, `C` and `D` will be `int` so all compiles.
+If, however, we wrote
+```
+{*z + (x - y) + 0.1f}
+```
+in our requirement expression, we would get a compile-time error:
+```
+ex3.cpp:21:5: error: no matching function for call to 'concf'
+    concf(2, new int(3));
+    ^~~~~
+ex3.cpp:15:6: note: candidate template ignored: constraints not satisfied [with T = int, R = int *]
+void concf(T x, R y) {
+     ^
+ex3.cpp:14:10: note: because 'Conc<int, int *>' evaluated to false
+requires Conc<T, R>
+         ^
+ex3.cpp:10:30: note: because type constraint 'ThreeIntegralsAndSecondPointer<float, int *, int, int>' was not satisfied:
+    {*z + (x - y) + 0.1f} -> ThreeIntegralsAndSecondPointer<R, T, T>; // (1)
+                             ^
+ex3.cpp:5:5: note: because 'std::is_integral<float>::value' evaluated to false
+    std::is_integral<A>::value && std::is_pointer<B>::value && 
+    ^
+```
+so we can see the `float` sneaking in from the _behind the scenes_ `decltype`.
