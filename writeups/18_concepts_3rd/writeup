@@ -1,0 +1,99 @@
+Third and last episode on concepts!
+The running theme so far is what are various forms of requirements. So, we've covered
+* simple requirements
+* type requirements
+* compound requirements
+The last one is _nested requirements_. The form is:
+> requires _contraint-expresion_;
+To me, looks weird and not useful at first glance :P Intuition says, one could merge the _constraint-expression_ introduced in that way to the outer `requirement` and all would be the same. Well, not quite -- one thing is not polluting scope. Let's observe an example:
+```
+#include <string>
+#include <set>
+
+template<typename T, typename R>
+concept NiceSearchableContainer = requires (T x, R z) {
+    std::is_integral<T>::value;
+    requires requires (R q) { // (1)
+        q.find(z);
+    };
+    R::npos;
+};
+
+template<typename T, typename R>
+requires NiceSearchableContainer<T, R>
+bool foo(T x, R y) {
+    return y.find("baz") != R::npos;
+}
+
+int main() {
+    foo(1, std::string("bar")); // (2)
+    foo(2, std::set<int>{3,4}); // (3)
+}
+```
+Notice how:
+* we could introduce `R q` at `(1)` without cluttering concept's scope
+* the double `requres requires` at `(1)` may seem odd -- that's because we want to test syntactical correctness of things *inside* such introduced nested requirement and not syntactical correctness of merely a `requires` expression. This is ultra weird syntax IMO, so bear with me :) Seeing two outputs of compiler with and without double `requires` should give an understanding of what happens :) Firstly, with double `requires` we have:
+```
+ex4.cpp:21:5: error: no matching function for call to 'foo'
+    foo(2, std::set<int>{3,4}); // (3)
+    ^~~
+ex4.cpp:15:6: note: candidate template ignored: constraints not satisfied [with T = int, R = std::set<int, std::less<int>, std::allocator<int>>]
+bool foo(T x, R y) {
+     ^
+ex4.cpp:14:10: note: because 'NiceSearchableContainer<int, std::set<int, std::less<int>, std::allocator<int> > >' evaluated to false
+requires NiceSearchableContainer<T, R>
+         ^
+ex4.cpp:8:11: note: because 'q.find(z)' would be invalid: no matching member function for call to 'find'
+        q.find(z);
+          ^
+```
+So, what happened here is `q.find(z)` from the nested requirement has been tested for correctness (which turns out to be not correct when instantiated `R = std::set` and OK when `R = std::string` as line `(2)` has passed the test).
+Buuuut, what happens when we change just
+> requires requires (R q) { // (1)
+to
+> requires (R q) { // (1)
+is:
+```
+ex4.cpp:7:5: warning: this requires expression will only be checked for syntactic validity; did you intend to place it in a nested requirement? (add another 'requires' before the expression) [-Wrequires-expression]
+    requires (R q) { // (1)
+    ^
+    requires
+ex4.cpp:21:5: error: no matching function for call to 'foo'
+    foo(2, std::set<int>{3,4}); // (3)
+    ^~~
+ex4.cpp:15:6: note: candidate template ignored: constraints not satisfied [with T = int, R = std::set<int, std::less<int>, std::allocator<int>>]
+bool foo(T x, R y) {
+     ^
+ex4.cpp:14:10: note: because 'NiceSearchableContainer<int, std::set<int, std::less<int>, std::allocator<int> > >' evaluated to false
+requires NiceSearchableContainer<T, R>
+         ^
+ex4.cpp:10:8: note: because 'R::npos' would be invalid: no member named 'npos' in 'std::set<int, std::less<int>, std::allocator<int>>'
+    R::npos;
+       ^
+```
+So we see that constrains has not been satisfied for an entirely different reason now -- due to `::npos` not being available for `std::set`. So, in particular
+```
+    requires (R q) { // (1)
+        q.find(z);
+    };
+```
+has passed! Fortunately, thanks to `clang` being friendly, it warns us that the whole `requires ...` thing will be checked for syntax *as-is*, and not its individual constraints:
+```
+ex4.cpp:7:5: warning: this requires expression will only be checked for syntactic validity; did you intend to place it in a nested requirement? (add another 'requires' before the expression) [-Wrequires-expression]
+    requires (R q) { // (1)
+    ^
+    requires
+```
+so at least that's good that compiler is on our side :P
+
+As a last note, one could get used to `requires requires` if, just like lambdas vs functions, one would like to use ad-hoc constraints vs concepts. It looks like this (taken shamelessly from cppreference :))
+```
+template<typename T>
+    requires requires (T x) { x + x; } // ad-hoc constraint, note keyword used twice
+T add(T a, T b) { return a + b; }
+```
+
+As a summary of all 3 episodes:
+* I like concepts a lot, especially that it's essentially a compile-time verifiable documentation
+* I dislike every occurence of `requires requires` -- the Commitee could have given a bit more thought into cleaniness and simplicity of the syntax there imo
+* I haven't delved into good practices of using concepts and for that I encourage everyone to check out https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#t20-avoid-concepts-without-meaningful-semantics (and neighbouring concept-related guidelines)
