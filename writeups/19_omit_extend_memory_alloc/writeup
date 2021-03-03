@@ -1,0 +1,31 @@
+C++ has introduced possibility for compiler to optimize `new` allocations. At https://en.cppreference.com/w/cpp/language/new#Allocation we have
+```
+New-expressions are allowed to elide or combine allocations made through replaceable allocation functions. In case of elision, the storage may be provided by the compiler without making the call to an allocation function (this also permits optimizing out unused new-expression). (...)
+```
+That sounds pretty fascinating to me :D
+I failed to come up with a good example and so searched for it and what's interesting is that even though there are seemingly good examples, e.g. https://stackoverflow.com/q/31873616 , they in fact don't show what is advertised. Consider, from that stackoverflow thread, the program:
+```
+#include <new>  
+
+int main()
+{
+	int* mem = new (std::nothrow) int[1000];
+  
+    if (mem != 0)
+      return 1;
+
+	return 0;
+}
+```
+With clang-11 and no special flags we see it produces a call to `new`
+>         call    operator new[](unsigned long, std::nothrow_t const&)
+(https://gcc.godbolt.org/#%7B%22version%22%3A3%2C%22filterAsm%22%3A%7B%22labels%22%3Atrue%2C%22directives%22%3Atrue%2C%22commentOnly%22%3Atrue%2C%22intel%22%3Atrue%7D%2C%22compilers%22%3A%5B%7B%22sourcez%22%3A%22MQSwdgxgNgrgJgUwAQB4wIO4D4lIFB7gAuSAtgIbgAUAlHgN54CQxAVGQqUgLxLoZIqAZyJwAXGLAB7IgAsATlIw0kxANoBGAAw6AugG48uI7lUAzQaU5IAhLy11Tp%2BQiIx5YJBsPMXbj0hahgC%2BQAAA%22%2C%22compiler%22%3A%22clang351%22%2C%22options%22%3A%22-O3%22%7D%5D%7D)
+whereas after putting `-O3` there the compiled code always returns 1
+>         mov     eax, 1
+>         ret
+(https://gcc.godbolt.org/#%7B%22version%22%3A3%2C%22filterAsm%22%3A%7B%22labels%22%3Atrue%2C%22directives%22%3Atrue%2C%22commentOnly%22%3Atrue%2C%22intel%22%3Atrue%7D%2C%22compilers%22%3A%5B%7B%22sourcez%22%3A%22MQSwdgxgNgrgJgUwAQB4wIO4D4lIFB7gAuSAtgIbgAUAlHgN54CQxAVGQqUgLxLoZIqAZyJwAXGLAB7IgAsATlIw0kxANoBGAAw6AugG48uI7lUAzQaU5IAhLy11Tp%2BQiIx5YJBsPMXbj0hahgC%2BQAAA%22%2C%22compiler%22%3A%22clang351%22%2C%22options%22%3A%22-O3%22%7D%5D%7D)
+so, yeah, looks like that optimization works as it should. But wait, the same "always return 1" happens when using `-std=c++11 -O3` !
+(https://gcc.godbolt.org/#%7B%22version%22%3A3%2C%22filterAsm%22%3A%7B%22labels%22%3Atrue%2C%22directives%22%3Atrue%2C%22commentOnly%22%3Atrue%2C%22intel%22%3Atrue%7D%2C%22compilers%22%3A%5B%7B%22sourcez%22%3A%22MQSwdgxgNgrgJgUwAQB4wIO4D4lIFB7gAuSAtgIbgAUAlHgN54CQxAVGQqUgLxLoZIqAZyJwAXGLAB7IgAsATlIw0kxANoBGAAw6AugG48uI7lUAzQaU5IAhLy11Tp%2BQiIx5YJBsPMXbj0hahgC%2BQAAA%22%2C%22compiler%22%3A%22clang351%22%2C%22options%22%3A%22-O3%22%7D%5D%7D)
+yet it shouldn't be allowed for pre c++14...
+
+So, we've got a quirky optimization that probably happens even if it should not (at least on clang). Oh the compiler opts...
