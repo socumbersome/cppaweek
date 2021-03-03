@@ -1,4 +1,4 @@
-C++ has introduced possibility for compiler to optimize `new` allocations. At https://en.cppreference.com/w/cpp/language/new#Allocation we have
+C++14 has introduced possibility for compiler to optimize `new` allocations. At https://en.cppreference.com/w/cpp/language/new#Allocation we have
 ```
 New-expressions are allowed to elide or combine allocations made through replaceable allocation functions. In case of elision, the storage may be provided by the compiler without making the call to an allocation function (this also permits optimizing out unused new-expression). (...)
 ```
