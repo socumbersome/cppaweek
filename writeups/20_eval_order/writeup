@@ -1,0 +1,31 @@
+C++17 has introduced stricter rules on order of evaluation. Which means, some forms that used to be unspecified, since C++17 are specified.
+One could say: waaaat? The rules have been with us since the dawn of Time and probably we all already got used to knowing that e.g. in `foo(bar(), baz())` it's unspecified which from `bar` and `baz` will be called first! So, for those who got a faster heartbeat reading this -- no worries, this has remained unspecified! :D (as it should :) oooh, what scary ideas would it give to programmers if it became specified... :D). The `P0145R3` (http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2016/p0145r3.pdf) explains which forms obtained specified order and why.
+Let me pick bits from `P0145R3`:
+* a very nice example that has UB pre-C++17:
+```
+#include <cassert>
+#include <string>
+
+int main() {
+    std::string s = "but I have heard it works even if you don't believe in it";
+    s.replace(0, 4, "")
+        .replace(
+            s.find("even"), 4, "only"
+        )
+        .replace(s.find(" don't"), 6, "");
+    
+    assert(s == "I have heard it works only if you believe in it");
+}
+```
+I didn't manage to hit the assert even with `-std=c++11` on modern clang and g++, but truth is, UB lurks there. The thing is, order of `s.find("even")` and `s.find(" don't")` is unspecified with regard to `replace` in `s.replace`. The fantastic in-depth explanation along with a "live-demo" is at: https://stackoverflow.com/a/27158813 (demo: http://coliru.stacked-crooked.com/a/a6035cb6e64f038f)
+And UB is gone since C++17, where `replace` in `s.replace` is forced to be evaluated before `s.find`-s, so we don't get messed up indexes for `.replace`.
+
+Additionally, `P0145R3` adds:
+```
+The initializations of the declared parameters are indeterminately sequenced with no interleaving.
+```
+And so
+```
+foo(std::unique_ptr<A>(new A), std::unique_ptr<B>(new B));
+```
+is fine, whereas in pre-C++17 we may have gotten: `new A` -> `new B` -> `new B` throws, thus `new A` leaks (there's no `unique_ptr<A>` consturcted yet and never will be). Again, great extended explanation to be found on stackoverflow :) -> https://stackoverflow.com/a/46472497
