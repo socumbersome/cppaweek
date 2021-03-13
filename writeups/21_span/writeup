@@ -1,0 +1,52 @@
+C++20 has introduced an `std::span`. After https://en.cppreference.com/w/cpp/container/span
+> The class template span describes an object that can refer to a contiguous sequence of objects with the first element of the sequence at position zero.
+What is important, it's by design super lightweight, and unlike for example `std::array` it doesn't allocate anything for the contiguous sequence. It's main purpose is to give the user a nice and safe API known from other standard containers (with methods like `front`, `back`, `size`, `begin`, `end` and so on), so one could think it's just an object with a pointer and length inside plus convenient methods.
+Let's observe and example:
+```
+#include <iostream>
+#include <vector>
+#include <string>
+#include <span>
+
+template<typename T>
+void every_second(std::span<T> s) {
+    for(bool skip = false; auto& elem : s) {
+        if(!skip) {
+            std::cout << elem;
+        }
+        skip = !skip;
+    }
+    std::cout << " - processed" << std::endl;
+}
+
+int main() {
+    int buffer[5] = {1,2,3,4,5};
+    int buffer2[] = {6,7,8,9,10,11};
+    char* buffer3 = new char[3];
+    buffer3[0] = 'c'; buffer3[1] = 'a'; buffer3[2] = 't';
+    std::vector<int> v{2,3,5,7};
+    std::string s{"interesting"};
+    std::vector<std::string> vs{{"cat", "does", "moew"}};
+    
+    every_second<int>(buffer);
+    every_second<int>(buffer2);
+    every_second<char>({buffer3, 3});
+    // every_second<char>({buffer3, 42}); // oops, compiles!
+    every_second<int>(v);
+    every_second<char>(s);
+    every_second<std::string>(vs);
+}
+```
+And the output being
+```
+135 - processed
+6810 - processed
+ct - processed
+25 - processed
+itrsig - processed
+catmoew - processed
+```
+It's especially nice to see that it has dealt with `buffer2` correctly. And as with all good things, that it's not an ultimate remedy for going out of range -- compiler won't be able to deduce size of the sequence for `buffer3` (i.e. "just pointers") so if we want, we can go wrong as the commented out line with "oops, compiles!" shows :)
+
+I'd say it's a nice type when giving sequences to _someone else_ -- limiting API to a uniform one is imo a good thing. Less confusion and less chance of using it wrongly. It's interesting that we needed to wait to C++20 for that :)
+For more on when to use it, I recommend this answer: https://stackoverflow.com/a/45723820/1923988
