@@ -46,7 +46,16 @@ ct - processed
 itrsig - processed
 catmoew - processed
 ```
-It's especially nice to see that it has dealt with `buffer2` correctly. And as with all good things, that it's not an ultimate remedy for going out of range -- compiler won't be able to deduce size of the sequence for `buffer3` (i.e. "just pointers") so if we want, we can go wrong as the commented out line with "oops, compiles!" shows :)
+It's especially nice to see that it has dealt with `buffer2` correctly. And as with all good things, that it's not an ultimate remedy for going out of range -- compiler won't be able to deduce size of the sequence for `buffer3` (i.e. "just pointers") so if we want, we can go wrong as the commented out line with "oops, compiles!" shows :) And if we tried to pass `buffer3` only, we would get:
+```
+ex.cpp:28:5: error: no matching function for call to 'every_second'
+    every_second<char>(buffer3);
+    ^~~~~~~~~~~~~~~~~~
+ex.cpp:7:6: note: candidate function template not viable: no known conversion from 'char *' to 'std::span<char>' for 1st argument
+void every_second(std::span<T> s) {
+
+```
+which is understandable -- it's not possible to deduce the length having only a raw pointer (that itself may not represent a sequence).
 
 I'd say it's a nice type when giving sequences to _someone else_ -- limiting API to a uniform one is imo a good thing. Less confusion and less chance of using it wrongly. It's interesting that we needed to wait to C++20 for that :)
 For more on when to use it, I recommend this answer: https://stackoverflow.com/a/45723820/1923988
