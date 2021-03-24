@@ -1,0 +1,83 @@
+C++20 has introduced a `source_location` header. At https://en.cppreference.com/w/cpp/utility/source_location it's advertised as being better than good old ways
+
+> Previously, functions that desire to obtain this information about the call site (for logging, testing, or debugging purposes) must use macros so that predefined macros like __LINE__ and __FILE__ are expanded in the context of the caller. The source_location class provides a better alternative.
+
+We have two ways of getting it: a constructor (constructing with unspecified values...) and a static method `current`.
+And we have four field getters: `line`, `column`, `file_name` and `function_name`.
+So, let's see how it plays out in practice. Let's start simple:
+```
+#include <iostream>
+#include <source_location>
+
+int main() {
+    std::cout << std::source_location::current().line() << std::endl;
+}
+```
+That will output `5` when executed (https://godbolt.org/z/YKsf747hx). Cool, makes sense :)
+Now, as it's just an object, we can create it somewhere and then print its values. With
+```
+#include <iostream>
+#include <source_location>
+
+int main() {
+    auto sl = std::source_location::current();
+    std::cout << sl.line() << ", " << sl.column() << ", "
+              << sl.file_name() << ", " << sl.function_name() << std::endl;
+}
+```
+we get as output `5, 45, ./example.cpp, int main()` -- ok, so it remembers its values at the time `current()` evaluates, since `line` is `5`.
+
+Next, what is interesting about `current` is, among others:
+> If current() is used in a default argument, the return value corresponds to the location of the call to current() at the call site.
+It could be seen like this:
+```
+#include <iostream>
+#include <source_location>
+
+void log_fun(std::string_view s, std::source_location sl =
+             std::source_location::current()) {
+    std::cout << "wow, custom log on line " << sl.line() << " in " 
+              << sl.function_name() << ": " << s << std::endl;
+}
+
+int main() {
+    log_fun("moew");
+}
+```
+which outputs
+> wow, custom log on line 11 in int main(): moew
+(https://godbolt.org/z/as3oc8Ean)
+wowowow, indeed the user of our super custom logging function `log_fun` doesn't need to prepare anything and we get information about its call site! How awesome is that :D
+
+Next, let's look closer at `function_name`. It's pretty powerful when dealing with templates, for instance:
+```
+#include <iostream>
+#include <source_location>
+#include <string>
+
+template<typename T>
+void foo(T x) {
+    auto sl = std::source_location::current();
+    std::cout << sl.function_name() << std::endl;
+}
+
+template<typename U>
+struct Bar {
+    Bar(U u) : blah(u) {}
+    U blah;
+};
+
+int main() {
+    foo(2);
+    foo(Bar<std::string>{"baz"});
+}
+```
+gives:
+```
+void foo(T) [with T = int]
+void foo(T) [with T = Bar<std::__cxx11::basic_string<char> >]
+```
+(https://godbolt.org/z/G77vWYoWz)
+so that's super cool information! :O
+
+On an interesting note, this feature has prompted a debate whether source code needs to reside in files :) For more -- https://stackoverflow.com/questions/57548221/does-c20-mandate-source-code-being-stored-in-files
