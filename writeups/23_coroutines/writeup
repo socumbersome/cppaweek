@@ -1,0 +1,250 @@
+C++20 has introduced `coroutines`. Quick description of what that is (after https://en.cppreference.com/w/cpp/language/coroutines):
+> A coroutine is a function that can suspend execution to be resumed later.
+OK, so when one calls a coroutine function, it might give control back to the caller at some point and that doesn't necessarily mean that that function has completed its excecution. What would that be useful for? One imaginable use-case is generating unending sequences of _something_ -- I'll take as an example generating squares of ints.
+The coroutine will then look like that:
+```
+<TODO> allSquares() {
+  for(int i = 1; ; ++i) {
+    co_yield (i * i);
+  }
+}
+```
+(for now let's not bother with <TODO>)
+where `co_yield` is a keyword in C++20 and meaning of expression using it is:
+> Yield-expression returns a value to the caller and suspends the current coroutine: it is the common building block of resumable generator functions
+Then, a caller migh do:
+```
+auto as = allSquares();
+int x = as.<TODO>();
+int y = as.<TODO>();
+```
+and, again disregarding <TODO>s, we shall obtain `x = 1, y = 4`.
+The reason why there are <TODO>s is that C++ allows for a lot of customization in these places. So, apart from writing a coroutine, we will also be responsible for defining the return type of it (`<TODO> allSquares() { ... }`) and for defining appropriate _getters_ (`int x = as.<TODO>();`) on this type. First requirement on that type is that it must expose a (yet another (!)) type that will be called `promise_type`. So, let's say we will name `<TODO>` in `<TODO> allSquares()` as `MyGenerator`, then skeleton must start with:
+```
+class MyGenerator {
+public:
+  using promise_type = <TODO_PT>;
+```
+where <TODO_PT> must be a type that exposes additional methods, best seen as a minimal example from https://en.cppreference.com/w/cpp/language/coroutines:
+```
+  struct promise_type {
+    task get_return_object() { return {}; }
+    std::suspend_never initial_suspend() { return {}; }
+    std::suspend_never final_suspend() noexcept { return {}; }
+    void return_void() {}
+    void unhandled_exception() {}
+  };
+```
+
+Now, at this point it certainly looks like there's a lot of mystery going on. The mystery comes from complexity that happens under the hood. I recommend unveiling the mystery starting from understanding a skeleton of what there is to coroutines. So, warning! This now will be complex as in "more than one new thing at once", but should be followable by following and matching output of the program with its code. A full skeleton that satisfies all the requirements that C++ imposes is:
+```
+#include <coroutine>
+#include <iostream>
+
+class MyGenerator {
+public:
+  struct MyPromise;
+  using promise_type = MyPromise;
+
+  MyGenerator(std::coroutine_handle<MyPromise> h)
+  : coro_(h) {
+    std::cout << "MyGenerator::MyGenerator with coroutine_handle " << h.address() << std::endl;
+  }
+
+  ~MyGenerator() {
+    std::cout << "MyGenerator::~MyGenerator" << std::endl;
+    if(coro_) {
+      std::cout << "coroutine " << coro_.address() << " present, calling destroy" << std::endl;
+      coro_.destroy();
+      std::cout << "coroutine destroyed" << std::endl;
+    }
+  }
+
+  int very_custom_value() {
+    std::cout << "MyGenerator::very_custom_value";
+    int promise_val = coro_.promise().get_very_custom_val();
+    return promise_val + 1;
+  }
+
+  bool very_custom_next() {
+    std::cout << "MyGenerator::very_custom_next, calling coro_.resume();" << std::endl;
+    coro_.resume();
+    
+    bool ret = !coro_.done();
+    std::cout << "MyGenerator::very_custom_next, coro_.resume() returned, coro_.done = " << !ret << std::endl;
+    return ret;
+  }
+
+  class MyPromise {
+  public:
+    struct MyAwaitable {
+      bool await_ready() noexcept {
+        std::cout << "MyPromise::MyAwaitable::await_ready" << std::endl;
+        return false;
+      }
+      void await_suspend(std::coroutine_handle<MyPromise> h) noexcept {
+        std::cout << "MyPromise::MyAwaitable::await_suspend, h = " << h.address() << std::endl;
+      }
+      void await_resume() noexcept {
+        std::cout << "MyPromise::MyAwaitable::await_resume" << std::endl;
+      }
+    };
+    
+    MyPromise() {
+      std::cout << "MyPromise::MyPromise" << std::endl;
+    }
+    
+    ~MyPromise() {
+      std::cout << "MyPromise::~MyPromise" << std::endl;
+    }
+  
+    MyGenerator get_return_object() {
+      std::cout << "MyPromise::get_return_object" << std::endl;
+      return MyGenerator{
+        std::coroutine_handle<MyPromise>::from_promise(*this)
+      };
+    }
+    
+    MyAwaitable initial_suspend() {
+      std::cout << "MyPromise::initial_suspend" << std::endl;
+      return {};
+    }
+
+    MyAwaitable yield_value(int x) {
+      std::cout << "MyPromise::yield_value, x = " << x << std::endl;
+      val_ = x;
+      return {};
+    }
+
+    MyAwaitable final_suspend() noexcept {
+      std::cout << "MyPromise::final_suspend" << std::endl;
+      return {};
+    }
+    
+    void unhandled_exception() {
+      std::cout << "MyPromise::unhandled_exception" << std::endl;
+    }
+    
+    int get_very_custom_val() {
+      std::cout << "MyPromise::get_very_custom_val (" << val_ << ")" << std::endl;
+      return val_;
+    }
+    
+  private:
+    int val_;
+  };
+  
+private:
+  std::coroutine_handle<MyPromise> coro_;
+};
+
+MyGenerator allSquares() {
+  std::cout << "allSquares called" << std::endl;
+  for(int i = 1; ; ++i) {
+    std::cout << "allSquares, will co_yield " << i * i << std::endl;
+    co_yield (i * i);
+    std::cout << "allSquares, co_yield of " << i << " done " << std::endl;
+  }
+}
+
+int main ()
+{
+  std::cout << "main: will call allSquares" << std::endl;
+  MyGenerator myCoroutineResult = allSquares();
+  std::cout << "main: allSquares returned with generator" << std::endl << std::endl;
+  for(int i = 0; myCoroutineResult.very_custom_next(); i++) {
+    std::cout << "main: next iteration" << std::endl;
+    std::cout << "main: calling myCoroutineResult.very_custom_value()" << std::endl;
+    int r = myCoroutineResult.very_custom_value();
+    std::cout << "main: myCoroutineResult.very_custom_value() = " << r << std::endl;
+    std::cout << "main: end of current iteration" << std::endl << std::endl;
+    if(i > 2) {
+      std::cout << "main: did " << i + 1 << " iterations, breaking the loop" << std::endl;
+      break;
+    }
+  }
+
+  return 0;
+}
+```
+Phew, that is a lot of code! For understanding of what compiler does under the hood and what is truly custom, I recommend looking at the output when running this program (in my case, I've built it with `g++-10 -std=c++20 -O0 -fcoroutines <file>`):
+```
+main: will call allSquares
+MyPromise::MyPromise
+MyPromise::get_return_object
+MyGenerator::MyGenerator with coroutine_handle 0x12b0ec0
+MyPromise::initial_suspend
+MyPromise::MyAwaitable::await_ready
+MyPromise::MyAwaitable::await_suspend, h = 0x12b0ec0
+main: allSquares returned with generator
+
+MyGenerator::very_custom_next, calling coro_.resume();
+MyPromise::MyAwaitable::await_resume
+allSquares called
+allSquares, will co_yield 1
+MyPromise::yield_value, x = 1
+MyPromise::MyAwaitable::await_ready
+MyPromise::MyAwaitable::await_suspend, h = 0x12b0ec0
+MyGenerator::very_custom_next, coro_.resume() returned, coro_.done = 0
+main: next iteration
+main: calling myCoroutineResult.very_custom_value()
+MyGenerator::very_custom_valueMyPromise::get_very_custom_val (1)
+main: myCoroutineResult.very_custom_value() = 2
+main: end of current iteration
+
+MyGenerator::very_custom_next, calling coro_.resume();
+MyPromise::MyAwaitable::await_resume
+allSquares, co_yield of 1 done 
+allSquares, will co_yield 4
+MyPromise::yield_value, x = 4
+MyPromise::MyAwaitable::await_ready
+MyPromise::MyAwaitable::await_suspend, h = 0x12b0ec0
+MyGenerator::very_custom_next, coro_.resume() returned, coro_.done = 0
+main: next iteration
+main: calling myCoroutineResult.very_custom_value()
+MyGenerator::very_custom_valueMyPromise::get_very_custom_val (4)
+main: myCoroutineResult.very_custom_value() = 5
+main: end of current iteration
+
+MyGenerator::very_custom_next, calling coro_.resume();
+MyPromise::MyAwaitable::await_resume
+allSquares, co_yield of 2 done 
+allSquares, will co_yield 9
+MyPromise::yield_value, x = 9
+MyPromise::MyAwaitable::await_ready
+MyPromise::MyAwaitable::await_suspend, h = 0x12b0ec0
+MyGenerator::very_custom_next, coro_.resume() returned, coro_.done = 0
+main: next iteration
+main: calling myCoroutineResult.very_custom_value()
+MyGenerator::very_custom_valueMyPromise::get_very_custom_val (9)
+main: myCoroutineResult.very_custom_value() = 10
+main: end of current iteration
+
+MyGenerator::very_custom_next, calling coro_.resume();
+MyPromise::MyAwaitable::await_resume
+allSquares, co_yield of 3 done 
+allSquares, will co_yield 16
+MyPromise::yield_value, x = 16
+MyPromise::MyAwaitable::await_ready
+MyPromise::MyAwaitable::await_suspend, h = 0x12b0ec0
+MyGenerator::very_custom_next, coro_.resume() returned, coro_.done = 0
+main: next iteration
+main: calling myCoroutineResult.very_custom_value()
+MyGenerator::very_custom_valueMyPromise::get_very_custom_val (16)
+main: myCoroutineResult.very_custom_value() = 17
+main: end of current iteration
+
+main: did 4 iterations, breaking the loop
+MyGenerator::~MyGenerator
+coroutine 0x12b0ec0 present, calling destroy
+MyPromise::~MyPromise
+coroutine destroyed
+```
+(or one can see output online: https://godbolt.org/z/zjKabeGWh)
+
+Let's note some things:
+* because `MyGenerator` is a type written by a programmer, we can see that obtaining results from a coroutine can be affected a lot by the definition of its return type! Output lines `main: myCoroutineResult.very_custom_value() =` show that we don't get full squares as one could expect by looking at the body of `allSquares`, because `MyGenerator::very_custom_value` it totally custom
+* source-code wise, only two new and magical things were used: `co_yield` and a `std::coroutine_handle` (https://en.cppreference.com/w/cpp/coroutine/coroutine_handle). All the rest was written by hand
+* if we took away `if(i > 2) { ...` we could say that we can actually work on potentially infinite streams of data
+
+I'm ending this episode now (there will be second and third and maybe fourth as well :P) as writeup is quite long already. Next time, will look closer on actual implementation of `MyGenerator` and why some things were forced to look a particular way and why some were totally custom.
