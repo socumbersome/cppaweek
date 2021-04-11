@@ -1,0 +1,26 @@
+Let's recall our skeleton implementation from 1st episode and dive straight into the details:
+* `MyGenerator` is the return type of our coroutine `allSquares` and let's note that the only things forced are:
+** having publicly available `promise_type`
+** having a constructor taking a return type of `promise_type::get_return_object()`
+So, even such silly thing compiles: https://godbolt.org/z/qzr33PabG
+Conclusion: if one wants it, it's possible to not give any way of interaction with the coroutine :D
+* the return type of a coroutine acts as an API to interact with it (and we already know it's super customizable), while the `promise_type` acts as the _integration_ of the coroutine into the world. There are few requirements for such integration:
+** it always must have `get_return_object()`, `initial_suspend()`, `final_suspend()` and `unhandled_exception()` methods, otherwise we will get hit:
+```
+ex2.cpp:103:13: error: no member named ‘get_return_object’ in ‘std::__n4861::__coroutine_traits_impl<MyGenerator, void>::promise_type’ {aka ‘MyGenerator::MyPromise’}
+ex2.cpp:103:13: error: no member named ‘initial_suspend’ in ‘std::__n4861::__coroutine_traits_impl<MyGenerator, void>::promise_type’ {aka ‘MyGenerator::MyPromise’}
+ex2.cpp:103:13: error: no member named ‘final_suspend’ in ‘std::__n4861::__coroutine_traits_impl<MyGenerator, void>::promise_type’ {aka ‘MyGenerator::MyPromise’}
+```
+** it must have a `yield_value` method *if* the coroutine in question uses `co_yield` in its body (ha! at last some dots get connected now :D `co_yield x;` in coroutine's body will under the hood call `promise_type::yield_value(x)` and so it's also important to notice here there is no magic storing of the yielded value -- in the example from 1st episode, we store it by hand in `MyGenerator::MyPromise::val_`. So, again, if implementor wants it, they can ignore this value completely and surprise the implementor of `MyGenerator` (i.e. API) by always returning 42 for example)
+** the return type of required methods `initial_suspend`, `final_suspend` and `yield_value` must be a so called _awaitable_ which in turn also has an API requirement: it must expose `noexcept` methods: `await_ready`, `await_suspend` and `await_resume` -- otherwise, when e.g. trying to use
+```
+void initial_suspend() {
+```
+we'll get
+```
+error: awaitable type 'void' is not a structure
+  111 | MyGenerator allSquares() {
+      |             ^~~~~~~~~~
+```
+(a bit sad that error message points at `allSquares` ... maybe a bug :P)
+And so, in the example from 1st episode, for return type of `initial_suspend`, `final_suspend` and `yield_value` we used a hand-written `MyAwaitable`. Now, _awaitable_ is coupled with `std::coroutine_handle` and that will be explored in next episode, just to keep this one a bit shorter and digestible :)
